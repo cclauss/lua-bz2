@@ -1,0 +1,164 @@
+name: Test
+
+on:
+  push:
+    branches:
+      - "*"
+    tags-ignore:
+      - "*"
+    paths-ignore:
+      - "*.md"
+  pull_request:
+    paths-ignore:
+      - "*.md"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        luaVersion:
+          - 5.1
+          - 5.2
+          - 5.3
+          - 5.4
+          - 5.5
+          - luajit
+          - luajit-openresty
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+
+    env:
+      BZ2_BRANCH: master
+      BZ2_REF: 66c46b8c9436613fd81bc5d03f63a61933a4dcc3
+
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+    - name: Setup MSVC
+      uses: step-security/msvc-dev-cmd@22c98154b708dbd743e6f27a933cf6ceba3305c4 # v1.31.1
+      if: ${{ runner.os == 'Windows' && !startsWith(matrix.luaVersion, 'luajit') }}
+
+    - name: Restore libbz2 tarball
+      id: restore-libbz2
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 #v6.1.0
+      with:
+        path: bzip2.tar.gz
+        key: bzip2
+        enableCrossOsArchive: true
+
+    - name: Clone libbz2
+      if: ${{ steps.restore-libbz2.outputs.cache-hits != 'true' }}
+      run: |
+        cd "${{ runner.temp }}"
+        git clone --branch=${{ env.BZ2_BRANCH }} --single-branch https://gitlab.com/bzip2/bzip2.git
+
+    - name: Generate a libbz2 tarball from the source in the workspace
+      if: ${{ steps.restore-libbz2.outputs.cache-hits != 'true' }}
+      run: |
+        cd "${{ runner.temp }}"
+        cd bzip2
+        git archive "--format=tar.gz" -o "${{ github.workspace }}/bzip2.tar.gz" "--prefix=bzip2/" ${{ env.BZ2_REF }}
+
+    - name: Save libbz2 tarball
+      if: ${{ steps.restore-libbz2.outputs.cache-hits != 'true' }}
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 #v6.1.0
+      with:
+        path: bzip2.tar.gz
+        key: bzip2
+        enableCrossOsArchive: true
+
+    - name: Extract libbz2
+      run: tar -xf "bzip2.tar.gz"
+
+    - name: Configure libbz2 (Unix)
+      if: ${{ runner.os != 'Windows' }}
+      run: |
+        cmake \
+          -G "Unix Makefiles" \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DENABLE_SHARED_LIB=ON \
+          -DENABLE_STATIC_LIB=OFF \
+          -DENABLE_LIB_ONLY=ON \
+          --install-prefix /usr/local \
+          -S bzip2 \
+          -B build
+
+    - name: Configure libbz2 (Windows)
+      if: ${{ runner.os == 'Windows' }}
+      shell: cmd
+      run: |
+        IF "${{ matrix.luaVersion }}" EQU "luajit" (
+          SET "CMAKE_GENERATOR=MinGW Makefiles"
+        ) ELSE IF "${{ matrix.luaVersion }}" EQU "luajit-openresty" (
+          SET "CMAKE_GENERATOR=MinGW Makefiles"
+        ) ELSE (
+          SET "CMAKE_GENERATOR=NMake Makefiles"
+        )
+
+        cmake ^
+          -G "%CMAKE_GENERATOR%" ^
+          -DCMAKE_BUILD_TYPE=Release ^
+          -DENABLE_SHARED_LIB=OFF ^
+          -DENABLE_STATIC_LIB=ON ^
+          -DENABLE_LIB_ONLY=ON ^
+          --install-prefix C:\external ^
+          -S bzip2 ^
+          -B build
+
+    - name: Build libbz2
+      run: cmake --build build --config Release
+
+    - name: Install libbz2 (Unix)
+      if: ${{ runner.os != 'Windows' }}
+      run: sudo cmake --install build --config Release
+
+    - name: Install libbz2 (Windows)
+      if: ${{ runner.os == 'Windows' }}
+      run: cmake --install build --config Release
+
+    - name: Fix libbz2 install_name (macOS)
+      if: ${{ runner.os == 'macOS' }}
+      run: sudo install_name_tool -id /usr/local/lib/libbz2.dylib /usr/local/lib/libbz2.dylib
+
+    - name: Copy the static library of libbz2 to the correct location (Windows)
+      if: ${{ runner.os == 'Windows' }}
+      shell: cmd
+      run: |
+        IF "${{ matrix.luaVersion }}" EQU "luajit" (
+          SET "LIBEXT=a"
+          SET "LIBNAME=libbz2"
+        ) ELSE IF "${{ matrix.luaVersion }}" EQU "luajit-openresty" (
+          SET "LIBEXT=a"
+          SET "LIBNAME=libbz2"
+        ) ELSE (
+          SET "LIBEXT=lib"
+          SET "LIBNAME=bz2"
+        )
+        IF EXIST C:\external\lib\%LIBNAME%.%LIBEXT% DEL C:\external\lib\%LIBNAME%.%LIBEXT%
+        IF EXIST C:\external\lib\%LIBNAME%_static.%LIBEXT% (
+          COPY C:\external\lib\%LIBNAME%_static.%LIBEXT% C:\external\lib\%LIBNAME%.%LIBEXT%
+        ) ELSE (
+          ECHO %LIBNAME%_static.%LIBEXT% is required to build lua-bz2
+          EXIT /B 1
+        )
+
+    - name: Install Lua
+      uses: luarocks/gh-actions-lua@85e2287697275df96334743ac654241a8fd34ab3 # v13
+      with:
+        luaVersion: ${{ matrix.luaVersion }}
+
+    - name: Install LuaRocks
+      uses: luarocks/gh-actions-luarocks@95d2308a0aff36ad31ebadca493ed14853399842 # v7
+
+    - name: Build
+      run: luarocks make
+
+    - name: Test
+      run: lua test.lua
