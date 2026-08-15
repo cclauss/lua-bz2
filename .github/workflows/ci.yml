@@ -1,0 +1,56 @@
+# Can this package be installed on Lua 5.4 and 5.5 on macOS, Ubuntu, and Windows?
+
+name: luarocks_install
+run-name: luarocks install lua-bz2
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
+
+jobs:
+  luarocks_install:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+        lua-version: [5.4, 5.5]  # [5.1, 5.2, 5.3, 5.4, 5.5]
+        luarocks-version: ["3.13.0"]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash  # Make Windows work like macOS and Linux.
+    permissions: {}
+    steps:
+      - run: echo "Installing lua-bz2 on ${{ matrix.os }} on ${{ runner.arch }}..."
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - if: runner.os == 'Linux'  # Only Linux has apt-get.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install --yes libbz2-dev
+      - if: runner.os == 'Windows'
+        run: |
+          choco install bzip2
+          BZ2_DIR="/c/ProgramData/chocolatey/lib/bzip2/tools"
+          ls "$BZ2_DIR"
+      - if: runner.os == 'Windows'  # Windows requires the MSVC cl tool.
+        uses: step-security/msvc-dev-cmd@22c98154b708dbd743e6f27a933cf6ceba3305c4 # v1.13.1
+      - run: cl || clang --version
+      - uses: luarocks/gh-actions-lua@85e2287697275df96334743ac654241a8fd34ab3 # v13
+        with:
+          luaVersion: ${{ matrix.lua-version }}
+      - uses: luarocks/gh-actions-luarocks@7c85eeff60655651b444126f2a78be784e836a0a # v6
+        with:
+          luaRocksVersion: ${{ matrix.luarocks-version }}
+      - run: lua -v && luarocks --version
+      - run: luarocks lint lua-bz2-dev-1.rockspec
+      - run: luarocks --local make lua-bz2-dev-1.rockspec
+      - run: luarocks --lua-version=${{ matrix.lua-version }} list  # other dependencies that are installed
+      - run: luarocks --lua-version=${{ matrix.lua-version }} show lua-bz2
+      - run: luarocks --lua-version=${{ matrix.lua-version }} doc lua-bz2
+      - run: luarocks --lua-version=${{ matrix.lua-version }} test lua-bz2
