@@ -1,5 +1,5 @@
 local package_name = "lua-bz2"
-local package_version = "dev"
+local package_version = "0.2.3"
 local rockspec_revision = "1"
 local github_account_name = "lunarmodules"
 local github_repo_name = "lua-bz2"
